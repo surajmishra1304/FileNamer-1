@@ -468,7 +468,8 @@ class Predictor:
         try:
             # Load class names
             if not LABELS_PATH.exists():
-                raise FileNotFoundError("Class names file not found")
+                LOGGER.info("No trained model found. Train a model first.")
+                return False
             
             with open(LABELS_PATH, "r") as f:
                 self.class_names = json.load(f)
@@ -487,7 +488,7 @@ class Predictor:
                 LOGGER.info("Model loaded successfully")
                 return True
             else:
-                LOGGER.error("Model file not found: %s", model_path)
+                LOGGER.info("Model file not found. Train a model first.")
                 return False
                 
         except Exception as e:
@@ -689,7 +690,7 @@ def ui_predict_single(appcfg: AppConfig, tcfg: TrainConfig):
         col1, col2 = st.columns([1, 1])
         
         with col1:
-            st.image(image, caption="Input Image", use_column_width=True)
+            st.image(image, caption="Input Image", use_container_width=True)
         
         with col2:
             if st.button("🔮 Predict", key="predict_single"):
@@ -876,7 +877,7 @@ def ui_annotate(appcfg: AppConfig, tcfg: TrainConfig):
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.image(image, caption=f"iPhone Service History - Image {idx+1}/{len(urls)}", use_column_width=True)
+        st.image(image, caption=f"iPhone Service History - Image {idx+1}/{len(urls)}", use_container_width=True)
         
         # Show OCR results
         with st.expander("🔍 OCR Extracted Text", expanded=False):
@@ -989,7 +990,7 @@ def ui_annotate(appcfg: AppConfig, tcfg: TrainConfig):
             # Display results
             import pandas as pd
             df = pd.DataFrame(results)
-            st.dataframe(df, use_column_width=True)
+            st.dataframe(df, use_container_width=True)
             
             # Summary stats
             successful = len([r for r in results if r["Status"] == "✅ Success"])

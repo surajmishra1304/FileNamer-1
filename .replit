@@ -2,7 +2,7 @@ modules = ["python-3.11"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["cairo", "ffmpeg-full", "freetype", "ghostscript", "gobject-introspection", "gtk3", "lcms2", "libimagequant", "libjpeg", "libjpeg_turbo", "libpng", "libtiff", "libwebp", "libxcrypt", "libyaml", "openjpeg", "pkg-config", "qhull", "tcl", "tk", "which", "zlib"]
+packages = ["cairo", "ffmpeg-full", "freetype", "ghostscript", "gobject-introspection", "gtk3", "lcms2", "libGL", "libGLU", "libimagequant", "libjpeg", "libjpeg_turbo", "libpng", "libtiff", "libwebp", "libxcrypt", "libyaml", "openjpeg", "pkg-config", "qhull", "tcl", "tesseract", "tk", "which", "zlib"]
 
 [deployment]
 deploymentTarget = "autoscale"
@@ -47,3 +47,6 @@ args = "uv add torch torchvision pillow requests matplotlib tqdm pyyaml streamli
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[agent]
+integrations = ["python_openai==1.0.0"]

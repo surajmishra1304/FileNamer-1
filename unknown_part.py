@@ -32,6 +32,10 @@ from torchvision import datasets, models, transforms
 import streamlit as st
 from streamlit_drawable_canvas import st_canvas
 
+# OCR and CV
+import cv2
+import pytesseract
+
 # Optional plotting
 import matplotlib
 matplotlib.use("Agg")
@@ -56,6 +60,7 @@ METRICS_PATH = DEFAULT_MODEL_DIR / "metrics.json"
 RUNTIME_CONFIG_PATH = DEFAULT_MODEL_DIR / "runtime_config.json"
 IMAGE_CACHE_DIR = DEFAULT_MODEL_DIR / "image_cache"
 ANNOTATIONS_CSV = DEFAULT_MODEL_DIR / "annotations.csv"
+FEEDBACK_CSV = DEFAULT_MODEL_DIR / "feedback.csv"
 LOG_DIR = DEFAULT_MODEL_DIR / "logs"
 LOG_FILE = LOG_DIR / "app.log"
 IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -523,6 +528,100 @@ class Predictor:
                 results.append(("Error", 0.0))
         
         return results
+
+# ========== OCR iPhone Service History Detector ==========
+class iPhoneServiceHistoryDetector:
+    def __init__(self):
+        pass
+    
+    def extract_text_from_image(self, image: Image.Image) -> str:
+        """Extract text from image using OCR"""
+        try:
+            # Convert PIL to OpenCV format
+            opencv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+            
+            # Extract text using pytesseract
+            extracted_text = pytesseract.image_to_string(opencv_image)
+            return extracted_text
+        except Exception as e:
+            LOGGER.error(f"OCR extraction failed: {e}")
+            return ""
+    
+    def detect_service_status(self, image: Image.Image) -> Tuple[str, float, str]:
+        """Detect if parts show 'Service' or 'Unknown Part' in iPhone service history"""
+        
+        extracted_text = self.extract_text_from_image(image)
+        
+        # Look for "Parts and Service History" section
+        if "parts and service history" not in extracted_text.lower():
+            return "No Service History Found", 0.0, extracted_text
+        
+        # Count occurrences of "Service" and "Unknown Part"
+        service_count = extracted_text.lower().count("service")
+        unknown_part_count = extracted_text.lower().count("unknown part")
+        
+        # Determine prediction based on counts
+        if unknown_part_count > 0:
+            confidence = min(0.9, (unknown_part_count * 0.3) + 0.6)
+            return "Unknown Part", confidence, extracted_text
+        elif service_count > 2:  # More than 2 to account for the header
+            confidence = min(0.9, (service_count * 0.15) + 0.5)
+            return "Service", confidence, extracted_text
+        else:
+            return "Unclear", 0.3, extracted_text
+
+# ========== Feedback Management ==========
+class FeedbackManager:
+    def __init__(self):
+        self.feedback_file = FEEDBACK_CSV
+        self.ensure_feedback_file()
+    
+    def ensure_feedback_file(self):
+        """Create feedback CSV if it doesn't exist"""
+        if not self.feedback_file.exists():
+            with open(self.feedback_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['timestamp', 'image_url', 'predicted_class', 'confidence', 'user_feedback', 'correct_class', 'extracted_text'])
+    
+    def save_feedback(self, image_url: str, predicted_class: str, confidence: float, user_feedback: bool, correct_class: str, extracted_text: str):
+        """Save user feedback to CSV"""
+        try:
+            with open(self.feedback_file, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    datetime.now().isoformat(),
+                    image_url,
+                    predicted_class,
+                    confidence,
+                    user_feedback,
+                    correct_class,
+                    extracted_text.replace('\n', ' ').replace('\r', ' ')[:500]  # Limit text length
+                ])
+            LOGGER.info(f"Feedback saved for prediction: {predicted_class} -> {correct_class}")
+        except Exception as e:
+            LOGGER.error(f"Failed to save feedback: {e}")
+    
+    def get_feedback_stats(self) -> Dict[str, Any]:
+        """Get feedback statistics"""
+        try:
+            import pandas as pd
+            if self.feedback_file.exists():
+                df = pd.read_csv(self.feedback_file)
+                total_feedback = len(df)
+                correct_predictions = len(df[df['user_feedback'] == True])
+                accuracy = correct_predictions / total_feedback if total_feedback > 0 else 0
+                
+                return {
+                    'total_feedback': total_feedback,
+                    'correct_predictions': correct_predictions,
+                    'accuracy': accuracy,
+                    'class_distribution': df['predicted_class'].value_counts().to_dict() if total_feedback > 0 else {}
+                }
+            else:
+                return {'total_feedback': 0, 'correct_predictions': 0, 'accuracy': 0, 'class_distribution': {}}
+        except Exception as e:
+            LOGGER.error(f"Failed to get feedback stats: {e}")
+            return {'total_feedback': 0, 'correct_predictions': 0, 'accuracy': 0, 'class_distribution': {}}
 
 # ========== Streamlit UI Components ==========
 def ui_sidebar(tcfg: TrainConfig, appcfg: AppConfig) -> Tuple[TrainConfig, AppConfig]:

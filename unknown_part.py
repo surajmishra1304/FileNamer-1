@@ -773,8 +773,14 @@ def ui_predict_single(appcfg: AppConfig, tcfg: TrainConfig):
                             # Color-coded result
                             if predicted_class == "Unknown Part":
                                 st.error(f"🚨 **{predicted_class}**")
-                            else:
+                            elif predicted_class == "Service":
+                                st.warning(f"⚠️ **{predicted_class}**")
+                            elif predicted_class == "Genuine":
                                 st.success(f"✅ **{predicted_class}**")
+                            elif predicted_class == "Data not correct":
+                                st.info(f"❌ **{predicted_class}**")
+                            else:
+                                st.write(f"❓ **{predicted_class}**")
                             
                             st.metric("Confidence", f"{confidence:.1%}")
                             
@@ -968,9 +974,13 @@ def ui_annotate(appcfg: AppConfig, tcfg: TrainConfig):
         if predicted_class == "Unknown Part":
             st.error(f"🚨 **{predicted_class}**")
         elif predicted_class == "Service":
-            st.success(f"✅ **{predicted_class}**")
-        else:
             st.warning(f"⚠️ **{predicted_class}**")
+        elif predicted_class == "Genuine":
+            st.success(f"✅ **{predicted_class}**")
+        elif predicted_class == "Data not correct":
+            st.info(f"❌ **{predicted_class}**")
+        else:
+            st.write(f"❓ **{predicted_class}**")
         
         st.metric("Confidence", f"{confidence:.1%}")
         st.progress(confidence)
@@ -995,7 +1005,7 @@ def ui_annotate(appcfg: AppConfig, tcfg: TrainConfig):
         if st.session_state.get(f'show_correction_{idx}', False):
             correct_class = st.selectbox(
                 "What is the correct classification?",
-                ["Service", "Unknown Part", "No Service History Found", "Unclear"],
+                ["Genuine", "Service", "Unknown Part", "Data not correct"],
                 key=f"correct_class_{idx}"
             )
             if st.button("Submit Correction", key=f"submit_{idx}"):
@@ -1103,7 +1113,7 @@ def organize_annotations_to_dataset():
         # Create dataset directories
         dataset_dir = Path(DEFAULT_TRAIN_CONFIG.data_dir)
         for split in ["train", "val"]:
-            for class_name in ["Unknown Part", "Genuine"]:
+            for class_name in ["Genuine", "Service", "Unknown Part", "Data not correct"]:
                 (dataset_dir / split / class_name).mkdir(parents=True, exist_ok=True)
         
         # Read annotations
@@ -1155,7 +1165,7 @@ def setup_training_data_from_urls(urls: List[str], label: str = "Unknown Part"):
         # Create dataset directories
         dataset_dir = Path(DEFAULT_TRAIN_CONFIG.data_dir)
         for split in ["train", "val"]:
-            for class_name in ["Unknown Part", "Genuine"]:
+            for class_name in ["Genuine", "Service", "Unknown Part", "Data not correct"]:
                 (dataset_dir / split / class_name).mkdir(parents=True, exist_ok=True)
         
         fetcher = ImageFetcher(DEFAULT_APP_CONFIG)
@@ -1222,7 +1232,7 @@ def ui_train(tcfg: TrainConfig):
         with col1:
             label_choice = st.selectbox(
                 "Label for these images:",
-                ["Unknown Part", "Genuine"],
+                ["Genuine", "Service", "Unknown Part", "Data not correct"],
                 key="bulk_label_choice"
             )
         
@@ -1268,11 +1278,9 @@ def ui_train(tcfg: TrainConfig):
                 ax.set_title('Dataset Class Distribution')
                 
                 # Color bars
+                colors = {'Genuine': '#44ff44', 'Service': '#ffaa44', 'Unknown Part': '#ff4444', 'Data not correct': '#4488ff'}
                 for i, (bar, class_name) in enumerate(zip(bars, classes)):
-                    if class_name == "Unknown Part":
-                        bar.set_color('#ff4444')
-                    else:
-                        bar.set_color('#44ff44')
+                    bar.set_color(colors.get(class_name, '#888888'))
                 
                 plt.xticks(rotation=45)
                 plt.tight_layout()

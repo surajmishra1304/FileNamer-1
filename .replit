@@ -1,0 +1,49 @@
+modules = ["python-3.11"]
+
+[nix]
+channel = "stable-25_05"
+packages = ["cairo", "ffmpeg-full", "freetype", "ghostscript", "gobject-introspection", "gtk3", "lcms2", "libimagequant", "libjpeg", "libjpeg_turbo", "libpng", "libtiff", "libwebp", "libxcrypt", "libyaml", "openjpeg", "pkg-config", "qhull", "tcl", "tk", "which", "zlib"]
+
+[deployment]
+deploymentTarget = "autoscale"
+run = ["streamlit", "run", "app.py", "--server.port", "5000"]
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "iPhone Part Detection App"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "install_dependencies"
+
+[[workflows.workflow]]
+name = "iPhone Part Detection App"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pip install --upgrade pip && pip install torch torchvision streamlit pillow requests matplotlib tqdm pyyaml streamlit-drawable-canvas && streamlit run unknown_part.py --server.port 5000"
+waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[workflows.workflow]]
+name = "install_dependencies"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "uv add torch torchvision pillow requests matplotlib tqdm pyyaml streamlit-drawable-canvas"
+
+[[ports]]
+localPort = 5000
+externalPort = 80

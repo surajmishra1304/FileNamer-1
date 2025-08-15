@@ -1,0 +1,5 @@
+timestamp,image_url,predicted_class,confidence,user_feedback,correct_class,extracted_text
+2025-08-15T14:40:06.330856,https://s3n.cashify.in/public/logistics-integration/images/MPMKC10684991_1702030885655.jpg,No Service History Found,0.0,False,Service,
+2025-08-15T14:40:39.137047,https://s3n.cashify.in/public/logistics-integration/images/MPMKC10684991_1702030885655.jpg,No Service History Found,0.0,False,Service,
+2025-08-15T14:40:55.270399,https://s3n.cashify.in/public/logistics-integration/images/MPMKC10684991_1702030885655.jpg,No Service History Found,0.0,False,Service,
+2025-08-15T14:41:12.650030,https://s3n.cashify.in/public/logistics-integration/images/MPMKC10684991_1702030885655.jpg,No Service History Found,0.0,False,Service,

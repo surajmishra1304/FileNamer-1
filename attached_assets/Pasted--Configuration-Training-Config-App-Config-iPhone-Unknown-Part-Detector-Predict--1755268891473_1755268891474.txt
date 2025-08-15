@@ -1,0 +1,101 @@
+
+⚙️ Configuration
+Training Config
+
+App Config
+
+📱 iPhone Unknown Part Detector
+
+🔍 Predict
+
+
+📊 Batch
+
+
+✏️ Annotate
+
+
+🎯 Train
+
+
+📈 Evaluate
+
+
+📊 Metrics
+
+
+📋 Logs
+
+📱 iPhone Service History Analysis
+📋 Paste your iPhone service history image URLs below (one per line) to analyze for Service vs Unknown Part detection
+
+Paste iPhone service history image URLs (one per line):
+
+https://s3n.cashify.in/public/logistics-integration/images/MPMKC10684991_1702030885655.jpg
+https://s3n.cashify.in/public/logistics-integration/images/MPMKC10684991_1702030885655.jpg
+https://s3n.cashify.in/public/logistics-integration/images/MPMIC10701395_1702031411394.jpg
+https://s3n.cashify.in/public/logistics-integration/images/MPMIC10701395_1702031411394.jpg
+https://s3n.cashify.in/public/logistics-integration/images/MPMKA10699749_1702032391335.jpg
+https://s3n.cashify.in/public/logistics-integration/images/MPMAE10669568_1702032984216.jpg
+https://s3n.cashify.in/public/logistics-integration/images/MPMDC10686738_1702033406409.jpg
+https://s3n.cashify.in/public/logistics-integration/images/MPMDC10686738_1702033406409.jpg
+https://s3n.cashify.in/public/logistics-integration/images/MPMLA10659881_1702034093197.jpg
+
+✅ Found 9 URLs ready for analysis
+
+Select image to analyze:
+
+0
+
+
+Image 1/9: https://s3n.cashify.in/public/logistics-integration/images/MPMKC10684991_1702030885655.jpg
+
+0
+iPhone Service History - Image 1/9
+
+🔍 OCR Extracted Text
+
+Raw OCR Output:
+
+Battery Service
+🎯 Analysis Results
+⚠️ No Service History Found
+
+Confidence
+
+0.0%
+📝 Provide Feedback
+Help improve accuracy:
+
+
+
+🔄 Navigation
+
+
+streamlit.errors.StreamlitAPIException: st.session_state.annotate_idx_number_input cannot be modified after the widget with key annotate_idx_number_input is instantiated.
+
+Traceback:
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 128, in exec_func_with_error_handling
+    result = func()
+             ^^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 669, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/unknown_part.py", line 1526, in <module>
+    main()
+File "/home/runner/workspace/unknown_part.py", line 1511, in main
+    ui_annotate(appcfg, tcfg)
+File "/home/runner/workspace/unknown_part.py", line 941, in ui_annotate
+    st.session_state['annotate_idx_number_input'] = min(len(urls)-1, idx+1)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/streamlit/runtime/metrics_util.py", line 443, in wrapped_func
+    result = non_optional_func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/streamlit/runtime/state/session_state_proxy.py", line 114, in __setitem__
+    get_session_state()[key] = value
+    ~~~~~~~~~~~~~~~~~~~^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/streamlit/runtime/state/safe_session_state.py", line 109, in __setitem__
+    self._state[key] = value
+    ~~~~~~~~~~~^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/streamlit/runtime/state/session_state.py", line 533, in __setitem__
+    raise StreamlitAPIException(

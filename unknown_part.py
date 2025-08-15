@@ -926,20 +926,9 @@ def ui_annotate(appcfg: AppConfig, tcfg: TrainConfig):
                 st.success(f"Correction saved: {correct_class}")
                 st.session_state[f'show_correction_{idx}'] = False
         
-        # Navigation for multiple images
+        # Navigation info for multiple images
         if len(urls) > 1:
-            st.subheader("🔄 Navigation")
-            col5, col6 = st.columns(2)
-            
-            with col5:
-                if st.button("⬅️ Previous", disabled=idx==0, key=f"prev_{idx}"):
-                    st.session_state['annotate_idx_number_input'] = max(0, idx-1)
-                    st.rerun()
-            
-            with col6:
-                if st.button("➡️ Next", disabled=idx==len(urls)-1, key=f"next_{idx}"):
-                    st.session_state['annotate_idx_number_input'] = min(len(urls)-1, idx+1)
-                    st.rerun()
+            st.info(f"💡 Use the number input above to navigate between images (1-{len(urls)})")
 
     # Batch analysis summary
     if urls and len(urls) > 1:

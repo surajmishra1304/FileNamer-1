@@ -5,7 +5,7 @@
     "Service",
     "Unknown Part"
   ],
-  "model_name": "resnet18",
+  "model_name": "resnet50",
   "num_classes": 4,
   "img_size": 224
 }

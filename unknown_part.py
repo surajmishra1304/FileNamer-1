@@ -1659,21 +1659,32 @@ def ui_annotate(appcfg: AppConfig, tcfg: TrainConfig):
         with col1:
             st.subheader("🖼️ Image & Area Marking")
             
-            # Drawing canvas for area annotation
-            canvas_result = st_canvas(
-                fill_color="rgba(255, 0, 0, 0.2)",  # Semi-transparent red
-                stroke_width=3,
-                stroke_color="#FF0000",  # Red stroke
-                background_image=image,
-                update_streamlit=True,
-                width=min(800, image.width),
-                height=int(min(800, image.width) * image.height / image.width),
-                drawing_mode="rect",  # Rectangle drawing mode
-                point_display_radius=0,
-                key=f"canvas_{current_idx}",
-            )
+            # Display the image first
+            st.image(image, caption=f"Image {current_idx + 1}", use_container_width=True)
             
-            st.write("💡 **Instructions**: Draw rectangles around the important areas (parts, components, etc.)")
+            # Drawing canvas for area annotation (without background image to avoid compatibility issues)
+            canvas_width = min(600, image.width)
+            canvas_height = int(canvas_width * image.height / image.width)
+            
+            # Try to create canvas with error handling for compatibility issues
+            canvas_result = None
+            try:
+                canvas_result = st_canvas(
+                    fill_color="rgba(255, 0, 0, 0.2)",  # Semi-transparent red
+                    stroke_width=3,
+                    stroke_color="#FF0000",  # Red stroke
+                    update_streamlit=True,
+                    width=canvas_width,
+                    height=canvas_height,
+                    drawing_mode="rect",  # Rectangle drawing mode
+                    point_display_radius=0,
+                    key=f"canvas_{current_idx}",
+                )
+                st.write("💡 **Instructions**: Draw rectangles on the canvas above to mark important areas. The canvas dimensions match the image proportions.")
+            except Exception as e:
+                st.warning(f"⚠️ Drawing canvas temporarily unavailable. You can still classify images.")
+                st.info("Canvas error: This may be due to library compatibility. Image classification still works normally.")
+                canvas_result = None
             
         with col2:
             st.subheader("📝 Annotation Details")
@@ -1694,13 +1705,15 @@ def ui_annotate(appcfg: AppConfig, tcfg: TrainConfig):
             )
             
             # Area annotations info
-            if canvas_result.json_data is not None:
+            if canvas_result and canvas_result.json_data is not None:
                 objects = canvas_result.json_data["objects"]
                 if objects:
                     st.write(f"📐 **Marked Areas**: {len(objects)} rectangle(s)")
                     for i, obj in enumerate(objects):
                         if obj["type"] == "rect":
                             st.write(f"• Area {i+1}: {obj['width']:.0f}×{obj['height']:.0f}px at ({obj['left']:.0f}, {obj['top']:.0f})")
+            elif canvas_result is None:
+                st.info("📐 Area marking unavailable - canvas compatibility issue")
             
             st.divider()
             
@@ -1708,7 +1721,7 @@ def ui_annotate(appcfg: AppConfig, tcfg: TrainConfig):
             if st.button("💾 Save Annotation", key=f"save_{current_idx}", type="primary"):
                 # Extract bounding box data
                 bounding_boxes = []
-                if canvas_result.json_data is not None:
+                if canvas_result and canvas_result.json_data is not None:
                     for obj in canvas_result.json_data["objects"]:
                         if obj["type"] == "rect":
                             bounding_boxes.append({

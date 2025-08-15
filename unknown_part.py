@@ -88,10 +88,14 @@ STREAMLIT_HANDLER.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | 
 LOGGER.addHandler(STREAMLIT_HANDLER)
 
 from logging.handlers import RotatingFileHandler
-FILE_HANDLER = RotatingFileHandler(LOG_FILE, maxBytes=2_000_000, backupCount=5, encoding="utf-8")
-FILE_HANDLER.setLevel(logging.DEBUG)
-FILE_HANDLER.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s", "%Y-%m-%d %H:%M:%S"))
-LOGGER.addHandler(FILE_HANDLER)
+try:
+    FILE_HANDLER = RotatingFileHandler(LOG_FILE, maxBytes=100_000, backupCount=1, encoding="utf-8")
+    FILE_HANDLER.setLevel(logging.WARNING)  # Only log warnings and errors to file
+    FILE_HANDLER.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s", "%Y-%m-%d %H:%M:%S"))
+    LOGGER.addHandler(FILE_HANDLER)
+except Exception:
+    # If file handler fails, continue without it
+    pass
 
 CONSOLE_HANDLER = logging.StreamHandler(sys.stdout)
 CONSOLE_HANDLER.setLevel(logging.INFO)
@@ -1631,6 +1635,12 @@ def save_runtime_config(tcfg, appcfg):
         with open(RUNTIME_CONFIG_PATH, "w") as f:
             json.dump(config, f, indent=2)
             
+    except (OSError, IOError) as e:
+        if e.errno == 122:  # Disk quota exceeded
+            # Silently skip saving when disk is full - this is not critical
+            pass
+        else:
+            LOGGER.warning("Failed to save runtime config: %s", e)
     except Exception as e:
         LOGGER.warning("Failed to save runtime config: %s", e)
 

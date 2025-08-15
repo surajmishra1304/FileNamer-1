@@ -513,22 +513,36 @@ class Predictor:
     
     def predict(self, image: Image.Image) -> Tuple[str, float]:
         """Predict class and confidence for a single image"""
-        if self.model is None or self.transform is None:
-            raise RuntimeError("Model not loaded")
-        
-        # Preprocess image
-        input_tensor = self.transform(image).unsqueeze(0).to(self.device)
-        
-        # Predict
-        with torch.no_grad():
-            outputs = self.model(input_tensor)
-            probabilities = torch.nn.functional.softmax(outputs[0], dim=0)
-            confidence, predicted_idx = torch.max(probabilities, 0)
+        try:
+            if self.model is None or self.transform is None:
+                raise RuntimeError("Model not loaded")
             
-            predicted_class = self.class_names[predicted_idx.item()]
-            confidence_score = confidence.item()
-        
-        return predicted_class, confidence_score
+            LOGGER.debug(f"Starting prediction with image size: {image.size}")
+            
+            # Preprocess image
+            input_tensor = self.transform(image).unsqueeze(0).to(self.device)
+            LOGGER.debug(f"Input tensor shape: {input_tensor.shape}")
+            
+            # Predict
+            with torch.no_grad():
+                outputs = self.model(input_tensor)
+                LOGGER.debug(f"Model outputs shape: {outputs.shape}")
+                
+                # Apply softmax along class dimension
+                probabilities = torch.nn.functional.softmax(outputs, dim=1)
+                confidence, predicted_idx = torch.max(probabilities, 1)
+                
+                predicted_class = self.class_names[predicted_idx.item()]
+                confidence_score = confidence.item()
+                
+                LOGGER.info(f"Prediction: {predicted_class} with confidence {confidence_score:.3f}")
+            
+            return predicted_class, confidence_score
+            
+        except Exception as e:
+            LOGGER.error(f"Prediction failed: {e}")
+            LOGGER.exception("Full prediction error:")
+            raise
     
     def predict_batch(self, images: List[Image.Image]) -> List[Tuple[str, float]]:
         """Predict classes and confidences for multiple images"""
@@ -717,6 +731,9 @@ def ui_predict_single(appcfg: AppConfig, tcfg: TrainConfig):
         with col2:
             if st.button("🔮 Predict", key="predict_single"):
                 try:
+                    st.info("Starting prediction...")
+                    LOGGER.info("Predict button clicked")
+                    
                     with st.spinner("Predicting..."):
                         predicted_class, confidence = predictor.predict(image)
                     
@@ -737,9 +754,21 @@ def ui_predict_single(appcfg: AppConfig, tcfg: TrainConfig):
                     if confidence < 0.5:
                         st.warning("⚠️ Low confidence prediction")
                     
+                    LOGGER.info(f"Prediction completed: {predicted_class} ({confidence:.1%})")
+                    
                 except Exception as e:
                     st.error(f"❌ Prediction failed: {e}")
-                    LOGGER.exception("Prediction error")
+                    LOGGER.error(f"Prediction error: {e}")
+                    LOGGER.exception("Full prediction error traceback:")
+                    
+                    # Debug info
+                    st.write("**Debug info:**")
+                    st.write(f"Model loaded: {predictor.model is not None}")
+                    st.write(f"Transform loaded: {predictor.transform is not None}")
+                    st.write(f"Class names: {predictor.class_names}")
+                    st.write(f"Image type: {type(image)}")
+                    st.write(f"Image size: {image.size}")
+                    st.write(f"Device: {predictor.device}")
 
 def ui_predict_batch(appcfg: AppConfig, tcfg: TrainConfig):
     """Batch prediction UI"""

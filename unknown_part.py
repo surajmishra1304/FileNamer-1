@@ -323,11 +323,17 @@ class Trainer:
             num_workers=self.config.num_workers
         )
         
-        # Save class names
+        # Save class names and model config
         class_names = train_dataset.classes
+        model_config = {
+            "class_names": class_names,
+            "model_name": self.config.model_name,
+            "num_classes": len(class_names),
+            "img_size": self.config.img_size
+        }
         with open(LABELS_PATH, "w") as f:
-            json.dump(class_names, f)
-        LOGGER.info("Saved class names: %s", class_names)
+            json.dump(model_config, f, indent=2)
+        LOGGER.info("Saved model config: %s", model_config)
         
         # Create model
         model = ModelFactory.create_backbone(
@@ -466,16 +472,26 @@ class Predictor:
     def load_model(self, model_path: Path = MODEL_PATH_BEST):
         """Load trained model for inference"""
         try:
-            # Load class names
+            # Load model config
             if not LABELS_PATH.exists():
                 LOGGER.info("No trained model found. Train a model first.")
                 return False
             
             with open(LABELS_PATH, "r") as f:
-                self.class_names = json.load(f)
+                model_config = json.load(f)
             
-            # Create model architecture
-            self.model = ModelFactory.create_backbone("resnet50", len(self.class_names), False)
+            # Handle both old and new config formats
+            if isinstance(model_config, list):
+                # Old format - just class names
+                self.class_names = model_config
+                model_name = "resnet50"  # default for old models
+            else:
+                # New format - full config
+                self.class_names = model_config["class_names"]
+                model_name = model_config.get("model_name", "resnet50")
+            
+            # Create model architecture with correct model type
+            self.model = ModelFactory.create_backbone(model_name, len(self.class_names), False)
             
             # Load weights
             if model_path.exists():
@@ -1071,9 +1087,101 @@ def organize_annotations_to_dataset():
         st.error(f"Failed to organize dataset: {e}")
         LOGGER.exception("Dataset organization failed")
 
+def setup_training_data_from_urls(urls: List[str], label: str = "Unknown Part"):
+    """Helper function to create training dataset from a list of URLs"""
+    try:
+        # Create dataset directories
+        dataset_dir = Path(DEFAULT_TRAIN_CONFIG.data_dir)
+        for split in ["train", "val"]:
+            for class_name in ["Unknown Part", "Genuine"]:
+                (dataset_dir / split / class_name).mkdir(parents=True, exist_ok=True)
+        
+        fetcher = ImageFetcher(DEFAULT_APP_CONFIG)
+        organized_count = 0
+        failed_count = 0
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for i, url in enumerate(urls):
+            try:
+                progress = (i + 1) / len(urls)
+                progress_bar.progress(progress)
+                status_text.text(f"Processing {i+1}/{len(urls)}: {url[:50]}...")
+                
+                # Generate filename from URL hash
+                filename = f"{sha256_of_text(url)}.jpg"
+                
+                # Determine split (80% train, 20% val)
+                split = "train" if hash(url) % 5 != 0 else "val"
+                
+                # Target path
+                target_path = dataset_dir / split / label / filename
+                
+                # Skip if already exists
+                if target_path.exists():
+                    continue
+                
+                # Download and save image
+                image = fetcher.fetch(url)
+                image.save(target_path, "JPEG", quality=95)
+                organized_count += 1
+                
+            except Exception as e:
+                LOGGER.warning("Failed to process URL %s: %s", url, e)
+                failed_count += 1
+        
+        progress_bar.progress(1.0)
+        status_text.text("Complete!")
+        
+        st.success(f"✅ Organized {organized_count} images into '{label}' class")
+        if failed_count > 0:
+            st.warning(f"⚠️ Failed to process {failed_count} URLs")
+        
+        return organized_count
+        
+    except Exception as e:
+        st.error(f"Failed to setup training data: {e}")
+        LOGGER.exception("Training data setup failed")
+        return 0
+
 def ui_train(tcfg: TrainConfig):
     """Training UI"""
     st.header("🎯 Model Training")
+    
+    # Dataset preparation section
+    st.subheader("📁 Dataset Preparation")
+    
+    # Bulk URL input for training data
+    with st.expander("🔗 Add Training Data from URLs", expanded=False):
+        st.info("Add multiple URLs to automatically download and organize training images")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            label_choice = st.selectbox(
+                "Label for these images:",
+                ["Unknown Part", "Genuine"],
+                key="bulk_label_choice"
+            )
+        
+        urls_input = st.text_area(
+            "Paste URLs (one per line):",
+            height=150,
+            placeholder="https://s3n.cashify.in/public/logistics-integration/images/MPMKC10684991_1702030885655.jpg\nhttps://example.com/image2.jpg\n...",
+            key="bulk_urls_input"
+        )
+        
+        if st.button("📥 Download and Organize Images", key="download_organize"):
+            urls = [u.strip() for u in urls_input.splitlines() if u.strip()]
+            if urls:
+                st.info(f"Processing {len(urls)} URLs for '{label_choice}' class...")
+                count = setup_training_data_from_urls(urls, label_choice)
+                if count > 0:
+                    st.balloons()
+            else:
+                st.warning("Please paste some URLs first")
+    
+    st.divider()
     
     # Dataset summary
     if st.button("📊 Check Dataset", key="check_dataset"):

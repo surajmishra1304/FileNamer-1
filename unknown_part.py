@@ -684,23 +684,34 @@ def ui_predict_single(appcfg: AppConfig, tcfg: TrainConfig):
     if 'predictor' not in st.session_state:
         st.session_state['predictor'] = Predictor()
         st.session_state['predictor_loaded'] = False
+        st.session_state['uploaded_image'] = None
+        st.session_state['fetched_image'] = None
     
     predictor = st.session_state['predictor']
     
-    # Load model
-    if st.button("Load Model", key="load_single"):
-        with st.spinner("Loading model..."):
-            if predictor.load_model():
-                st.success("✅ Model loaded successfully")
-                st.session_state['predictor_loaded'] = True
-            else:
-                st.error("❌ Failed to load model. Train a model first.")
+    # Load model section
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        if st.button("🔄 Load Model", key="load_single"):
+            try:
+                with st.spinner("Loading model..."):
+                    if predictor.load_model():
+                        st.success("✅ Model loaded!")
+                        st.session_state['predictor_loaded'] = True
+                    else:
+                        st.error("❌ Failed to load model. Train first.")
+                        st.session_state['predictor_loaded'] = False
+            except Exception as e:
+                st.error(f"Load error: {e}")
                 st.session_state['predictor_loaded'] = False
-                return
     
-    if not st.session_state.get('predictor_loaded', False):
-        st.info("👆 Click 'Load Model' to start predictions")
-        return
+    with col2:
+        if st.session_state.get('predictor_loaded', False):
+            st.success("✅ Model ready for predictions")
+        else:
+            st.warning("⚠️ Model not loaded")
+    
+    st.divider()
     
     # Image input options
     input_method = st.radio("Choose input method:", ["Upload Image", "Image URL"])
@@ -710,65 +721,85 @@ def ui_predict_single(appcfg: AppConfig, tcfg: TrainConfig):
         uploaded_file = st.file_uploader("Choose an image", type=['png', 'jpg', 'jpeg', 'webp'])
         if uploaded_file:
             image = Image.open(uploaded_file).convert("RGB")
+            st.session_state['uploaded_image'] = image
+            st.session_state['fetched_image'] = None
+        elif 'uploaded_image' in st.session_state:
+            image = st.session_state['uploaded_image']
     else:
-        url = st.text_input("Enter image URL:")
-        if url and st.button("Fetch Image"):
+        url = st.text_input("Enter image URL:", key="image_url_input")
+        if url and st.button("🔗 Fetch Image", key="fetch_btn"):
             try:
                 fetcher = ImageFetcher(appcfg)
                 with st.spinner("Fetching image..."):
                     image = fetcher.fetch(url)
                 st.success("✅ Image fetched successfully")
+                st.session_state['fetched_image'] = image
+                st.session_state['uploaded_image'] = None
             except Exception as e:
                 st.error(f"❌ Failed to fetch image: {e}")
+        elif 'fetched_image' in st.session_state:
+            image = st.session_state['fetched_image']
     
     # Display and predict
     if image:
+        st.divider()
         col1, col2 = st.columns([1, 1])
         
         with col1:
             st.image(image, caption="Input Image", use_container_width=True)
         
         with col2:
-            if st.button("🔮 Predict", key="predict_single"):
-                try:
-                    st.info("Starting prediction...")
-                    LOGGER.info("Predict button clicked")
-                    
-                    with st.spinner("Predicting..."):
-                        predicted_class, confidence = predictor.predict(image)
-                    
-                    # Display results
-                    st.subheader("🎯 Prediction Results")
-                    
-                    # Color-coded result
-                    if predicted_class == "Unknown Part":
-                        st.error(f"🚨 **{predicted_class}**")
-                    else:
-                        st.success(f"✅ **{predicted_class}**")
-                    
-                    st.metric("Confidence", f"{confidence:.1%}")
-                    
-                    # Confidence bar
-                    st.progress(confidence)
-                    
-                    if confidence < 0.5:
-                        st.warning("⚠️ Low confidence prediction")
-                    
-                    LOGGER.info(f"Prediction completed: {predicted_class} ({confidence:.1%})")
-                    
-                except Exception as e:
-                    st.error(f"❌ Prediction failed: {e}")
-                    LOGGER.error(f"Prediction error: {e}")
-                    LOGGER.exception("Full prediction error traceback:")
-                    
-                    # Debug info
-                    st.write("**Debug info:**")
-                    st.write(f"Model loaded: {predictor.model is not None}")
-                    st.write(f"Transform loaded: {predictor.transform is not None}")
-                    st.write(f"Class names: {predictor.class_names}")
-                    st.write(f"Image type: {type(image)}")
-                    st.write(f"Image size: {image.size}")
-                    st.write(f"Device: {predictor.device}")
+            if not st.session_state.get('predictor_loaded', False):
+                st.warning("⚠️ Load the model first")
+            else:
+                if st.button("🔮 Predict", key="predict_single", type="primary"):
+                    prediction_container = st.container()
+                    with prediction_container:
+                        try:
+                            LOGGER.info("Starting prediction...")
+                            
+                            # Show progress
+                            progress_text = st.empty()
+                            progress_text.text("🔄 Processing image...")
+                            
+                            with st.spinner("Predicting..."):
+                                predicted_class, confidence = predictor.predict(image)
+                            
+                            progress_text.empty()
+                            
+                            # Display results
+                            st.subheader("🎯 Prediction Results")
+                            
+                            # Color-coded result
+                            if predicted_class == "Unknown Part":
+                                st.error(f"🚨 **{predicted_class}**")
+                            else:
+                                st.success(f"✅ **{predicted_class}**")
+                            
+                            st.metric("Confidence", f"{confidence:.1%}")
+                            
+                            # Confidence bar
+                            st.progress(confidence)
+                            
+                            if confidence < 0.5:
+                                st.warning("⚠️ Low confidence prediction")
+                            
+                            LOGGER.info(f"Prediction completed: {predicted_class} ({confidence:.1%})")
+                            
+                        except Exception as e:
+                            st.error(f"❌ Prediction failed: {str(e)}")
+                            LOGGER.error(f"Prediction error: {e}")
+                            
+                            with st.expander("🔍 Debug Information", expanded=False):
+                                st.write(f"Model loaded: {predictor.model is not None}")
+                                st.write(f"Transform loaded: {predictor.transform is not None}")
+                                st.write(f"Class names: {predictor.class_names}")
+                                st.write(f"Image type: {type(image)}")
+                                if hasattr(image, 'size'):
+                                    st.write(f"Image size: {image.size}")
+                                st.write(f"Device: {predictor.device}")
+    else:
+        st.info("📷 Please upload an image or fetch from URL to start prediction")
 
 def ui_predict_batch(appcfg: AppConfig, tcfg: TrainConfig):
     """Batch prediction UI"""

@@ -1,1 +1,9 @@
-["Genuine", "Unknown Part"]
+{
+  "class_names": [
+    "Genuine",
+    "Unknown Part"
+  ],
+  "model_name": "resnet18",
+  "num_classes": 2,
+  "img_size": 224
+}

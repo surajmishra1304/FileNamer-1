@@ -666,7 +666,12 @@ def ui_predict_single(appcfg: AppConfig, tcfg: TrainConfig):
     """Single image prediction UI"""
     st.header("🔍 Single Image Prediction")
     
-    predictor = Predictor()
+    # Initialize predictor in session state
+    if 'predictor' not in st.session_state:
+        st.session_state['predictor'] = Predictor()
+        st.session_state['predictor_loaded'] = False
+    
+    predictor = st.session_state['predictor']
     
     # Load model
     if st.button("Load Model", key="load_single"):
@@ -676,6 +681,7 @@ def ui_predict_single(appcfg: AppConfig, tcfg: TrainConfig):
                 st.session_state['predictor_loaded'] = True
             else:
                 st.error("❌ Failed to load model. Train a model first.")
+                st.session_state['predictor_loaded'] = False
                 return
     
     if not st.session_state.get('predictor_loaded', False):
@@ -711,10 +717,6 @@ def ui_predict_single(appcfg: AppConfig, tcfg: TrainConfig):
         with col2:
             if st.button("🔮 Predict", key="predict_single"):
                 try:
-                    if not predictor.load_model():  # Ensure model is loaded
-                        st.error("Model not loaded")
-                        return
-                    
                     with st.spinner("Predicting..."):
                         predicted_class, confidence = predictor.predict(image)
                     

@@ -17,6 +17,7 @@ dependencies = [
     "openai>=1.99.9",
     "pytesseract>=0.3.13",
     "opencv-python>=4.11.0.86",
+    "trafilatura>=2.0.0",
 ]
 
 [[tool.uv.index]]

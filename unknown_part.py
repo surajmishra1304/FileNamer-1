@@ -903,210 +903,287 @@ def ui_predict_batch(appcfg: AppConfig, tcfg: TrainConfig):
             )
 
 def ui_annotate(appcfg: AppConfig, tcfg: TrainConfig):
-    """iPhone Service History Analysis Tool - Multiple URLs"""
-    st.header("📱 iPhone Service History Analysis")
+    """Enhanced Bulk Annotation Tool with Area Marking"""
+    st.header("✏️ Bulk Image Annotation Tool")
     
-    st.info("📋 Paste your iPhone service history image URLs below (one per line) to analyze for Service vs Unknown Part detection")
+    # Initialize session state for annotation
+    if 'annotation_urls' not in st.session_state:
+        st.session_state.annotation_urls = []
+    if 'current_annotation_idx' not in st.session_state:
+        st.session_state.current_annotation_idx = 0
+    if 'annotated_data' not in st.session_state:
+        st.session_state.annotated_data = {}
     
-    # Multiple URL input
+    st.info("📋 Paste your image URLs below (one per line) for bulk annotation with area marking capabilities")
+    
+    # URL input section
     url_text = st.text_area(
-        "Paste iPhone service history image URLs (one per line):", 
+        "Paste image URLs (one per line):", 
         height=120, 
-        placeholder="https://s3n.cashify.in/public/logistics-integration/images/MPMQD10707255_1702102878563.jpg\nhttps://example.com/iphone_service_history2.jpg\n...",
-        key="annotate_url_text_area"
+        placeholder="https://example.com/image1.jpg\nhttps://example.com/image2.jpg\n...",
+        key="bulk_annotate_url_text_area"
     )
     
-    urls = [u.strip() for u in url_text.splitlines() if u.strip()]
+    # Load URLs button
+    if st.button("🔄 Load URLs", key="load_urls"):
+        urls = [u.strip() for u in url_text.split('\n') if u.strip()]
+        if urls:
+            st.session_state.annotation_urls = urls
+            st.session_state.current_annotation_idx = 0
+            st.session_state.annotated_data = {}
+            st.success(f"✅ Loaded {len(urls)} URLs for annotation")
+            st.rerun()
     
-    if not urls:
+    if not st.session_state.annotation_urls:
         st.markdown("""
-        ### 📱 How to use:
-        1. **Paste URLs**: Copy your iPhone service history image URLs above (one per line)
-        2. **Analyze**: Each image will be analyzed for "Service" vs "Unknown Part" detection
-        3. **Provide Feedback**: Confirm correct predictions or correct wrong ones
-        4. **Batch Process**: Use "Analyze All Images" for processing multiple URLs at once
-        5. **Track Performance**: View accuracy metrics and confusion matrix
+        ### 🎯 How to use this tool:
+        1. **Paste URLs**: Add your image URLs above (one per line)
+        2. **Load URLs**: Click "Load URLs" to start the annotation process
+        3. **Mark Areas**: Use the drawing canvas to mark important areas in each image
+        4. **Classify**: Select the correct classification for each image
+        5. **Auto-Progress**: After annotation, automatically moves to the next image
+        6. **Export Data**: Download your annotations for training
         """)
         return
     
-    st.success(f"✅ Found {len(urls)} URLs ready for analysis")
+    # Progress tracking
+    total_images = len(st.session_state.annotation_urls)
+    current_idx = st.session_state.current_annotation_idx
+    completed = len(st.session_state.annotated_data)
     
-    # Image navigation
-    if len(urls) > 1:
-        idx = st.number_input(
-            "Select image to analyze:", 
-            min_value=0, 
-            max_value=len(urls)-1, 
-            value=0, 
-            step=1, 
-            key="annotate_idx_number_input"
-        )
-    else:
-        idx = 0
-    
-    url = urls[idx]
-    st.write(f"**Image {idx+1}/{len(urls)}:** {url}")
-    
-    # Fetch and analyze image
-    try:
-        fetcher = ImageFetcher(appcfg)
-        with st.spinner("Loading and analyzing image..."):
-            image = fetcher.fetch(url)
-            
-            # Analyze service history immediately
-            detector = iPhoneServiceHistoryDetector()
-            predicted_class, confidence, extracted_text = detector.detect_service_status(image)
-            
-    except Exception as e:
-        st.error(f"❌ Failed to load image: {e}")
-        return
-    
-    # Analysis interface
-    col1, col2 = st.columns([2, 1])
-    
+    # Progress bar and navigation
+    col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
-        st.image(image, caption=f"iPhone Service History - Image {idx+1}/{len(urls)}", use_container_width=True)
-        
-        # Show OCR results
-        with st.expander("🔍 OCR Extracted Text", expanded=False):
-            st.text_area("Raw OCR Output:", extracted_text, height=200, key=f"ocr_text_{idx}")
+        progress = (current_idx + 1) / total_images if total_images > 0 else 0
+        st.progress(progress, f"Image {current_idx + 1} of {total_images} | Annotated: {completed}")
     
     with col2:
-        st.subheader("🎯 Analysis Results")
-        
-        # Display prediction
-        if predicted_class == "Unknown Part":
-            st.error(f"🚨 **{predicted_class}**")
-        elif predicted_class == "Service":
-            st.warning(f"⚠️ **{predicted_class}**")
-        elif predicted_class == "Genuine":
-            st.success(f"✅ **{predicted_class}**")
-        elif predicted_class == "Data not correct":
-            st.info(f"❌ **{predicted_class}**")
-        else:
-            st.write(f"❓ **{predicted_class}**")
-        
-        st.metric("Confidence", f"{confidence:.1%}")
-        st.progress(confidence)
-        
-        # User feedback section
-        st.subheader("📝 Provide Feedback")
-        st.write("Help improve accuracy:")
-        
-        # Feedback buttons
-        col3, col4 = st.columns(2)
-        with col3:
-            if st.button("✅ Correct", key=f"correct_{idx}"):
-                feedback_manager = FeedbackManager()
-                feedback_manager.save_feedback(url, predicted_class, confidence, True, predicted_class, extracted_text)
-                st.success("Feedback saved!")
-        
-        with col4:
-            if st.button("❌ Incorrect", key=f"incorrect_{idx}"):
-                st.session_state[f'show_correction_{idx}'] = True
-        
-        # Correction interface
-        if st.session_state.get(f'show_correction_{idx}', False):
-            correct_class = st.selectbox(
-                "What is the correct classification?",
-                ["Genuine", "Service", "Unknown Part", "Data not correct"],
-                key=f"correct_class_{idx}"
-            )
-            if st.button("Submit Correction", key=f"submit_{idx}"):
-                feedback_manager = FeedbackManager()
-                feedback_manager.save_feedback(url, predicted_class, confidence, False, correct_class, extracted_text)
-                st.success(f"Correction saved: {correct_class}")
-                st.session_state[f'show_correction_{idx}'] = False
-        
-        # Navigation info for multiple images
-        if len(urls) > 1:
-            st.info(f"💡 Use the number input above to navigate between images (1-{len(urls)})")
-
-    # Batch analysis summary
-    if urls and len(urls) > 1:
-        st.subheader("📊 Batch Analysis Summary")
-        
-        if st.button("🚀 Analyze All Images", key="analyze_all"):
-            detector = iPhoneServiceHistoryDetector()
-            feedback_manager = FeedbackManager()
-            fetcher = ImageFetcher(appcfg)
-            
-            results = []
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            for i, batch_url in enumerate(urls):
-                try:
-                    status_text.text(f"Analyzing image {i+1}/{len(urls)}...")
-                    
-                    # Fetch and analyze
-                    batch_image = fetcher.fetch(batch_url)
-                    pred_class, conf, ocr_text = detector.detect_service_status(batch_image)
-                    
-                    results.append({
-                        "Image": f"{i+1}/{len(urls)}",
-                        "URL": batch_url[:50] + "..." if len(batch_url) > 50 else batch_url,
-                        "Prediction": pred_class,
-                        "Confidence": f"{conf:.1%}",
-                        "Status": "✅ Success"
-                    })
-                    
-                    # Auto-save high confidence predictions
-                    if conf > 0.7:
-                        feedback_manager.save_feedback(batch_url, pred_class, conf, True, pred_class, ocr_text)
-                    
-                except Exception as e:
-                    results.append({
-                        "Image": f"{i+1}/{len(urls)}",
-                        "URL": batch_url[:50] + "..." if len(batch_url) > 50 else batch_url,
-                        "Prediction": "Error",
-                        "Confidence": "0%",
-                        "Status": f"❌ {str(e)[:30]}"
-                    })
-                
-                progress_bar.progress((i + 1) / len(urls))
-            
-            status_text.text("✅ Batch analysis completed!")
-            
-            # Display results
-            import pandas as pd
-            df = pd.DataFrame(results)
-            st.dataframe(df, use_container_width=True)
-            
-            # Summary stats
-            successful = len([r for r in results if r["Status"] == "✅ Success"])
-            unknown_parts = len([r for r in results if r["Prediction"] == "Unknown Part"])
-            service_only = len([r for r in results if r["Prediction"] == "Service"])
-            
-            col7, col8, col9, col10 = st.columns(4)
-            col7.metric("Total Analyzed", len(urls))
-            col8.metric("Successful", successful)
-            col9.metric("Unknown Parts", unknown_parts)
-            col10.metric("Service Only", service_only)
-            
-            # Download results
-            csv = df.to_csv(index=False)
-            st.download_button(
-                label="📥 Download Analysis Results",
-                data=csv,
-                file_name=f"iphone_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
-            )
+        if st.button("⬅️ Previous", disabled=current_idx <= 0):
+            st.session_state.current_annotation_idx = max(0, current_idx - 1)
+            st.rerun()
     
-    # Show feedback summary
-    if st.button("📈 View Feedback Summary"):
-        feedback_manager = FeedbackManager()
-        stats = feedback_manager.get_feedback_stats()
+    with col3:
+        if st.button("➡️ Next", disabled=current_idx >= total_images - 1):
+            st.session_state.current_annotation_idx = min(total_images - 1, current_idx + 1)
+            st.rerun()
+    
+    if current_idx >= total_images:
+        st.success("🎉 All images have been processed!")
+        st.balloons()
+        return
+    
+    # Current image processing
+    current_url = st.session_state.annotation_urls[current_idx]
+    st.write(f"**Current Image:** {current_url}")
+    
+    # Load and display image
+    try:
+        fetcher = ImageFetcher(appcfg)
+        with st.spinner("Loading image..."):
+            image = fetcher.fetch(current_url)
+            
+        # Convert PIL image to numpy array for canvas
+        import numpy as np
+        image_np = np.array(image)
         
-        col11, col12, col13 = st.columns(3)
-        col11.metric("Total Feedback", stats['total_feedback'])
-        col12.metric("Correct Predictions", stats['correct_predictions'])
-        col13.metric("Accuracy", f"{stats['accuracy']:.1%}")
+        # Main annotation interface
+        col1, col2 = st.columns([3, 2])
         
-        if stats['total_feedback'] > 0:
-            st.write("**Prediction Distribution:**")
-            for class_name, count in stats['class_distribution'].items():
-                st.write(f"- {class_name}: {count}")
+        with col1:
+            st.subheader("🖼️ Image & Area Marking")
+            
+            # Drawing canvas for area annotation
+            canvas_result = st_canvas(
+                fill_color="rgba(255, 0, 0, 0.2)",  # Semi-transparent red
+                stroke_width=3,
+                stroke_color="#FF0000",  # Red stroke
+                background_image=image,
+                update_streamlit=True,
+                width=min(800, image.width),
+                height=int(min(800, image.width) * image.height / image.width),
+                drawing_mode="rect",  # Rectangle drawing mode
+                point_display_radius=0,
+                key=f"canvas_{current_idx}",
+            )
+            
+            st.write("💡 **Instructions**: Draw rectangles around the important areas (parts, components, etc.)")
+            
+        with col2:
+            st.subheader("📝 Annotation Details")
+            
+            # Classification selection
+            classification = st.selectbox(
+                "Select Classification:",
+                ["Unknown Part", "Genuine", "Service", "Data not correct"],
+                key=f"classification_{current_idx}"
+            )
+            
+            # Additional notes
+            notes = st.text_area(
+                "Additional Notes (optional):",
+                placeholder="Any additional observations about this image...",
+                height=100,
+                key=f"notes_{current_idx}"
+            )
+            
+            # Area annotations info
+            if canvas_result.json_data is not None:
+                objects = canvas_result.json_data["objects"]
+                if objects:
+                    st.write(f"📐 **Marked Areas**: {len(objects)} rectangle(s)")
+                    for i, obj in enumerate(objects):
+                        if obj["type"] == "rect":
+                            st.write(f"• Area {i+1}: {obj['width']:.0f}×{obj['height']:.0f}px at ({obj['left']:.0f}, {obj['top']:.0f})")
+            
+            st.divider()
+            
+            # Save annotation
+            if st.button("💾 Save Annotation", key=f"save_{current_idx}", type="primary"):
+                # Extract bounding box data
+                bounding_boxes = []
+                if canvas_result.json_data is not None:
+                    for obj in canvas_result.json_data["objects"]:
+                        if obj["type"] == "rect":
+                            bounding_boxes.append({
+                                "x": obj["left"],
+                                "y": obj["top"], 
+                                "width": obj["width"],
+                                "height": obj["height"]
+                            })
+                
+                # Save annotation data
+                annotation_data = {
+                    "url": current_url,
+                    "classification": classification,
+                    "notes": notes,
+                    "bounding_boxes": bounding_boxes,
+                    "annotated_at": datetime.now().isoformat(),
+                    "image_size": {"width": image.width, "height": image.height}
+                }
+                
+                st.session_state.annotated_data[current_idx] = annotation_data
+                
+                # Save to CSV file for persistence
+                save_annotation_to_file(annotation_data, current_idx)
+                
+                st.success("✅ Annotation saved!")
+                
+                # Auto-progress to next image
+                if current_idx < total_images - 1:
+                    st.session_state.current_annotation_idx += 1
+                    time.sleep(1)  # Brief pause to show success message
+                    st.rerun()
+                else:
+                    st.success("🎉 All images completed!")
+            
+            # Skip current image
+            if st.button("⏭️ Skip This Image", key=f"skip_{current_idx}"):
+                if current_idx < total_images - 1:
+                    st.session_state.current_annotation_idx += 1
+                    st.rerun()
+    
+    except Exception as e:
+        st.error(f"❌ Failed to load image: {e}")
+        if st.button("⏭️ Skip to Next", key="skip_error"):
+            if current_idx < total_images - 1:
+                st.session_state.current_annotation_idx += 1
+                st.rerun()
+    
+    # Annotation summary
+    st.divider()
+    st.subheader("📊 Annotation Progress")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Images", total_images)
+    col2.metric("Completed", completed)
+    col3.metric("Remaining", total_images - completed)
+    col4.metric("Progress", f"{(completed/total_images*100):.1f}%" if total_images > 0 else "0%")
+    
+    # Export annotations
+    if st.session_state.annotated_data:
+        if st.button("📥 Export Annotations", key="export_annotations"):
+            export_annotations_to_csv()
+            st.success("✅ Annotations exported to CSV!")
+    
+    # Clear all annotations
+    if st.button("🗑️ Clear All Annotations", key="clear_annotations"):
+        st.session_state.annotated_data = {}
+        st.session_state.current_annotation_idx = 0
+        st.success("✅ All annotations cleared!")
+        st.rerun()
+
+def save_annotation_to_file(annotation_data, idx):
+    """Save individual annotation to file"""
+    try:
+        # Ensure annotations directory exists
+        annotations_dir = DEFAULT_MODEL_DIR / "annotations"
+        annotations_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save individual annotation
+        annotation_file = annotations_dir / f"annotation_{idx}.json"
+        with open(annotation_file, 'w') as f:
+            json.dump(annotation_data, f, indent=2)
+            
+    except Exception as e:
+        LOGGER.error(f"Failed to save annotation to file: {e}")
+
+def export_annotations_to_csv():
+    """Export all annotations to CSV format"""
+    try:
+        if not st.session_state.annotated_data:
+            return
+        
+        # Prepare CSV data
+        csv_rows = []
+        for idx, data in st.session_state.annotated_data.items():
+            # Basic info
+            base_row = {
+                "image_id": idx,
+                "url": data["url"],
+                "classification": data["classification"],
+                "notes": data["notes"],
+                "annotated_at": data["annotated_at"],
+                "image_width": data["image_size"]["width"],
+                "image_height": data["image_size"]["height"],
+                "num_bounding_boxes": len(data["bounding_boxes"])
+            }
+            
+            # Add bounding box info
+            if data["bounding_boxes"]:
+                for i, bbox in enumerate(data["bounding_boxes"]):
+                    row = base_row.copy()
+                    row.update({
+                        "bbox_id": i,
+                        "bbox_x": bbox["x"],
+                        "bbox_y": bbox["y"],
+                        "bbox_width": bbox["width"],
+                        "bbox_height": bbox["height"]
+                    })
+                    csv_rows.append(row)
+            else:
+                csv_rows.append(base_row)
+        
+        # Convert to pandas DataFrame and save
+        import pandas as pd
+        df = pd.DataFrame(csv_rows)
+        
+        # Save to file
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = DEFAULT_MODEL_DIR / f"bulk_annotations_{timestamp}.csv"
+        df.to_csv(filename, index=False)
+        
+        # Also save to session state for download
+        csv_content = df.to_csv(index=False)
+        st.download_button(
+            "📥 Download Annotations CSV",
+            csv_content,
+            file_name=f"bulk_annotations_{timestamp}.csv",
+            mime="text/csv"
+        )
+        
+    except Exception as e:
+        LOGGER.error(f"Failed to export annotations: {e}")
+        st.error(f"❌ Failed to export annotations: {e}")
 
 def organize_annotations_to_dataset():
     """Organize annotated data into training dataset structure"""

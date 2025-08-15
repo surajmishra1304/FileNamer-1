@@ -8,6 +8,20 @@ This is a single-file machine learning application for detecting "Unknown Part" 
 
 Preferred communication style: Simple, everyday language.
 
+## Recent Changes (August 2025)
+
+### Enhanced Annotation System
+- **Bulk Image Annotation**: Added comprehensive bulk annotation tool for processing multiple image URLs
+- **Area Marking**: Integrated interactive drawing canvas (streamlit-drawable-canvas) for marking specific areas/regions in images
+- **Auto-progression**: After saving annotations, automatically moves to the next image for efficient workflow
+- **Data Export**: Enhanced annotation export with bounding box coordinates and metadata
+- **Progress Tracking**: Real-time progress indicators and navigation between images
+- **Persistent Storage**: Annotations saved both in session state and persistent files
+
+### Removed Test Data
+- Removed dataset/test directory and all test images as requested by user
+- Streamlined dataset structure to focus on train/validation splits
+
 ## System Architecture
 
 ### Single-File Architecture

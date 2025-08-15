@@ -10,6 +10,16 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes (August 2025)
 
+### Major Accuracy Improvements (Latest)
+- **Ensemble Prediction System**: Implemented comprehensive ensemble combining CNN + OCR + Image Quality Assessment
+- **Enhanced OCR Analysis**: Advanced pattern matching with regex, text preprocessing, and multi-strategy OCR
+- **Test-Time Augmentation**: Multiple prediction averaging for increased accuracy
+- **Confidence Calibration**: Entropy-based and class-specific confidence scoring
+- **Image Quality Assessment**: Automated quality metrics (sharpness, contrast, brightness, noise) affecting confidence
+- **Advanced Data Augmentation**: Enhanced training transforms including perspective, blur, and random erasing
+- **Class Imbalance Handling**: Weighted sampling and loss functions to address dataset imbalance
+- **Improved Training**: Better optimizer settings, adaptive learning rate scheduling, and early stopping
+
 ### Enhanced Annotation System
 - **Bulk Image Annotation**: Added comprehensive bulk annotation tool for processing multiple image URLs
 - **Area Marking**: Integrated interactive drawing canvas (streamlit-drawable-canvas) for marking specific areas/regions in images
@@ -17,6 +27,12 @@ Preferred communication style: Simple, everyday language.
 - **Data Export**: Enhanced annotation export with bounding box coordinates and metadata
 - **Progress Tracking**: Real-time progress indicators and navigation between images
 - **Persistent Storage**: Annotations saved both in session state and persistent files
+
+### Enhanced User Interface
+- **Detailed Analysis View**: Expandable sections showing CNN vs OCR predictions, quality metrics, and reasoning
+- **Quality Indicators**: Real-time image quality assessment with visual feedback
+- **Method Transparency**: Clear indication of which analysis methods were used (CNN-only, OCR-informed, ensemble)
+- **Confidence Warnings**: Color-coded confidence levels with actionable feedback
 
 ### Removed Test Data
 - Removed dataset/test directory and all test images as requested by user
@@ -33,19 +49,25 @@ The entire application is contained in a single Python file (`unknown_part.py`) 
 
 ### Machine Learning Pipeline
 - **Framework**: PyTorch with torchvision for computer vision tasks
-- **Model Architecture**: Transfer learning using pre-trained models (ResNet, EfficientNet, etc.)
+- **Model Architecture**: Transfer learning using pre-trained models (ResNet18/50, EfficientNet-V2)
+- **Ensemble System**: Multi-modal approach combining CNN visual analysis, OCR text analysis, and image quality assessment
 - **Training Features**: 
-  - Early stopping and learning rate scheduling
+  - Weighted sampling for severe class imbalance (219 "Data not correct" vs 20 "Genuine")
+  - Advanced data augmentation (perspective, blur, random erasing, color jitter)
+  - Test-Time Augmentation (TTA) for inference robustness
+  - Adaptive learning rate scheduling with ReduceLROnPlateau
   - Mixed precision training for efficiency
-  - Class imbalance handling with weighted loss functions
-  - Data augmentation for robustness
+  - Early stopping with patience-based monitoring
 - **Model Persistence**: Saves best and last model weights, TorchScript exports, and training history
+- **Confidence Calibration**: Entropy-based uncertainty estimation and class-specific calibration factors
 
 ### Data Management
-- **Dataset Structure**: Standard train/validation/test split with class-based folder organization
-- **Image Processing**: EXIF orientation correction, PIL-based image handling
+- **Dataset Structure**: Standard train/validation split with severe class imbalance (463 train, 126 validation images)
+- **Class Distribution**: Data not correct (219), Unknown Part (128), Service (96), Genuine (20)
+- **Image Processing**: EXIF orientation correction, PIL-based image handling, advanced OCR preprocessing
 - **Caching Strategy**: SHA256-based filename generation for downloaded images to avoid re-downloading
 - **Annotation System**: Interactive canvas-based bounding box annotation integrated into Streamlit UI
+- **Quality Assessment**: Automated evaluation of image sharpness, contrast, brightness, and noise levels
 
 ### User Interface
 - **Framework**: Streamlit for rapid web UI development

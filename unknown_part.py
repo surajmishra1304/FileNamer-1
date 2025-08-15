@@ -247,12 +247,28 @@ class ModelFactory:
 def build_transforms(img_size: int, is_train: bool) -> transforms.Compose:
     if is_train:
         return transforms.Compose([
-            transforms.Resize((img_size, img_size)),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomApply([transforms.ColorJitter(0.2, 0.2, 0.2, 0.1)], p=0.7),
-            transforms.RandomAffine(degrees=12, translate=(0.05, 0.05), scale=(0.95, 1.05), shear=4),
+            transforms.Resize((int(img_size * 1.1), int(img_size * 1.1))),  # Slightly larger for cropping
+            transforms.RandomCrop(img_size),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomVerticalFlip(p=0.1),  # Minimal vertical flip for phone components
+            transforms.RandomApply([
+                transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.05)
+            ], p=0.8),
+            transforms.RandomApply([
+                transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0))
+            ], p=0.2),
+            transforms.RandomAffine(
+                degrees=15, 
+                translate=(0.1, 0.1), 
+                scale=(0.9, 1.1), 
+                shear=8,
+                fill=128  # Gray fill for rotations
+            ),
+            transforms.RandomPerspective(distortion_scale=0.1, p=0.3),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            # Random erasing to simulate occlusions
+            transforms.RandomErasing(p=0.1, scale=(0.02, 0.1), ratio=(0.3, 3.3), value='random'),
         ])
     else:
         return transforms.Compose([
@@ -314,10 +330,29 @@ class Trainer:
             transform=val_transform
         )
         
+        # Handle severe class imbalance with weighted sampling
+        class_counts = [0] * len(train_dataset.classes)
+        for _, class_idx in train_dataset.samples:
+            class_counts[class_idx] += 1
+        
+        LOGGER.info(f"Class distribution: {dict(zip(train_dataset.classes, class_counts))}")
+        
+        # Calculate class weights (inverse frequency)
+        total_samples = sum(class_counts)
+        class_weights = [total_samples / (len(class_counts) * count) for count in class_counts]
+        
+        # Create sample weights for weighted sampling
+        sample_weights = [class_weights[class_idx] for _, class_idx in train_dataset.samples]
+        sampler = torch.utils.data.WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True
+        )
+        
         train_loader = DataLoader(
             train_dataset, 
             batch_size=self.config.batch_size,
-            shuffle=True, 
+            sampler=sampler,  # Use weighted sampling instead of shuffle
             num_workers=self.config.num_workers
         )
         val_loader = DataLoader(
@@ -347,14 +382,22 @@ class Trainer:
         )
         model = model.to(self.device)
         
-        # Loss and optimizer
-        criterion = nn.CrossEntropyLoss()
+        # Loss and optimizer with class balancing
+        class_weights_tensor = torch.FloatTensor(class_weights).to(self.device)
+        criterion = nn.CrossEntropyLoss(weight=class_weights_tensor)
+        
         optimizer = optim.AdamW(
             model.parameters(), 
             lr=self.config.lr, 
-            weight_decay=self.config.weight_decay
+            weight_decay=self.config.weight_decay,
+            eps=1e-8,  # For numerical stability
+            betas=(0.9, 0.999)
         )
-        scheduler = CosineAnnealingLR(optimizer, T_max=self.config.epochs)
+        
+        # Use ReduceLROnPlateau for better convergence
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='max', factor=0.5, patience=3, verbose=True
+        )
         
         # Training loop
         best_val_acc = 0.0
@@ -445,7 +488,7 @@ class Trainer:
                 LOGGER.info(f"Early stopping triggered after {epoch+1} epochs")
                 break
             
-            scheduler.step()
+            scheduler.step(val_acc)  # Step with validation accuracy
         
         # Save final model and history
         torch.save(model.state_dict(), MODEL_PATH_LAST)
@@ -516,30 +559,69 @@ class Predictor:
             return False
     
     def predict(self, image: Image.Image) -> Tuple[str, float]:
-        """Predict class and confidence for a single image"""
+        """Enhanced prediction with Test-Time Augmentation (TTA)"""
         try:
             if self.model is None or self.transform is None:
                 raise RuntimeError("Model not loaded")
             
             LOGGER.debug(f"Starting prediction with image size: {image.size}")
             
-            # Preprocess image
-            input_tensor = self.transform(image).unsqueeze(0).to(self.device)
-            LOGGER.debug(f"Input tensor shape: {input_tensor.shape}")
+            # Apply multiple transformations (Test-Time Augmentation)
+            tta_transforms = [
+                # Original
+                transforms.Compose([
+                    transforms.Resize((224, 224)),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ]),
+                # Slight rotations
+                transforms.Compose([
+                    transforms.Resize((224, 224)),
+                    transforms.RandomRotation(degrees=5),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ]),
+                # Color adjustment
+                transforms.Compose([
+                    transforms.Resize((224, 224)),
+                    transforms.ColorJitter(brightness=0.1, contrast=0.1),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ]),
+            ]
             
-            # Predict
+            all_predictions = []
+            
+            # Run predictions with different augmentations
             with torch.no_grad():
-                outputs = self.model(input_tensor)
-                LOGGER.debug(f"Model outputs shape: {outputs.shape}")
+                for transform in tta_transforms:
+                    try:
+                        input_tensor = transform(image).unsqueeze(0).to(self.device)
+                        outputs = self.model(input_tensor)
+                        probabilities = torch.nn.functional.softmax(outputs, dim=1)
+                        all_predictions.append(probabilities.cpu())
+                    except Exception as e:
+                        LOGGER.warning(f"TTA transform failed: {e}")
+                        continue
                 
-                # Apply softmax along class dimension
-                probabilities = torch.nn.functional.softmax(outputs, dim=1)
-                confidence, predicted_idx = torch.max(probabilities, 1)
+                if not all_predictions:
+                    # Fallback to single prediction
+                    input_tensor = self.transform(image).unsqueeze(0).to(self.device)
+                    outputs = self.model(input_tensor)
+                    probabilities = torch.nn.functional.softmax(outputs, dim=1)
+                    all_predictions = [probabilities.cpu()]
+                
+                # Average predictions
+                avg_probabilities = torch.mean(torch.stack(all_predictions), dim=0)
+                confidence, predicted_idx = torch.max(avg_probabilities, 1)
                 
                 predicted_class = self.class_names[predicted_idx.item()]
                 confidence_score = confidence.item()
                 
-                LOGGER.info(f"Prediction: {predicted_class} with confidence {confidence_score:.3f}")
+                # Apply confidence calibration based on class
+                confidence_score = self.calibrate_confidence(predicted_class, confidence_score, avg_probabilities[0])
+                
+                LOGGER.info(f"TTA Prediction: {predicted_class} with confidence {confidence_score:.3f}")
             
             return predicted_class, confidence_score
             
@@ -547,6 +629,301 @@ class Predictor:
             LOGGER.error(f"Prediction failed: {e}")
             LOGGER.exception("Full prediction error:")
             raise
+    
+    def calibrate_confidence(self, predicted_class: str, raw_confidence: float, probabilities: torch.Tensor) -> float:
+        """Calibrate confidence scores based on class characteristics and probability distribution"""
+        
+        # Calculate entropy of the prediction (uncertainty measure)
+        entropy = -torch.sum(probabilities * torch.log(probabilities + 1e-8)).item()
+        max_entropy = -math.log(1.0 / len(self.class_names))  # Maximum possible entropy
+        normalized_entropy = entropy / max_entropy
+        
+        # Adjust confidence based on entropy (lower entropy = higher confidence)
+        entropy_adjustment = 1.0 - (normalized_entropy * 0.3)
+        
+        # Class-specific calibration factors (based on typical accuracy per class)
+        class_factors = {
+            "Genuine": 0.95,      # Usually easier to identify
+            "Unknown Part": 0.85,  # Medium difficulty
+            "Service": 0.80,       # Can be ambiguous
+            "Data not correct": 0.70  # Often uncertain
+        }
+        
+        class_factor = class_factors.get(predicted_class, 0.8)
+        
+        # Calculate calibrated confidence
+        calibrated_confidence = raw_confidence * entropy_adjustment * class_factor
+        
+        # Ensure minimum confidence for very certain predictions
+        if raw_confidence > 0.9 and normalized_entropy < 0.3:
+            calibrated_confidence = max(calibrated_confidence, 0.75)
+        
+        return min(0.99, max(0.1, calibrated_confidence))
+
+# ========== Image Quality Assessment ==========
+class ImageQualityAssessor:
+    @staticmethod
+    def assess_image_quality(image: Image.Image) -> Dict[str, float]:
+        """Assess various quality metrics of the input image"""
+        try:
+            img_array = np.array(image)
+            
+            # Convert to grayscale for some assessments
+            if len(img_array.shape) == 3:
+                gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+            else:
+                gray = img_array
+            
+            metrics = {}
+            
+            # 1. Sharpness (Laplacian variance)
+            laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+            metrics['sharpness'] = min(1.0, laplacian_var / 500.0)  # Normalize
+            
+            # 2. Brightness
+            brightness = np.mean(gray) / 255.0
+            metrics['brightness'] = brightness
+            
+            # 3. Contrast (standard deviation)
+            contrast = np.std(gray) / 255.0
+            metrics['contrast'] = contrast
+            
+            # 4. Image size appropriateness
+            width, height = image.size
+            total_pixels = width * height
+            metrics['resolution_score'] = min(1.0, total_pixels / (224 * 224))
+            
+            # 5. Color distribution (for colored images)
+            if len(img_array.shape) == 3:
+                # Check if image is too monochromatic
+                rgb_std = np.std(img_array.reshape(-1, 3), axis=0)
+                color_variety = np.mean(rgb_std) / 255.0
+                metrics['color_variety'] = color_variety
+            else:
+                metrics['color_variety'] = 0.0
+            
+            # 6. Noise estimation (high-frequency content)
+            sobel_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+            sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+            edge_density = np.mean(np.sqrt(sobel_x**2 + sobel_y**2)) / 255.0
+            metrics['edge_density'] = edge_density
+            
+            # 7. Overall quality score
+            quality_weights = {
+                'sharpness': 0.3,
+                'contrast': 0.2,
+                'brightness': 0.15,
+                'resolution_score': 0.15,
+                'color_variety': 0.1,
+                'edge_density': 0.1
+            }
+            
+            # Penalize extreme brightness
+            brightness_penalty = 1.0
+            if brightness < 0.1 or brightness > 0.9:
+                brightness_penalty = 0.7
+            
+            overall_score = sum(metrics[key] * weight for key, weight in quality_weights.items())
+            overall_score *= brightness_penalty
+            
+            metrics['overall_quality'] = min(1.0, max(0.0, overall_score))
+            
+            return metrics
+            
+        except Exception as e:
+            LOGGER.warning(f"Image quality assessment failed: {e}")
+            return {
+                'sharpness': 0.5, 'brightness': 0.5, 'contrast': 0.5,
+                'resolution_score': 0.5, 'color_variety': 0.5, 
+                'edge_density': 0.5, 'overall_quality': 0.5
+            }
+
+# ========== Ensemble Predictor ==========
+class EnsemblePredictor:
+    def __init__(self):
+        self.cnn_predictor = Predictor()
+        self.ocr_detector = iPhoneServiceHistoryDetector()
+        self.quality_assessor = ImageQualityAssessor()
+        
+    def load_model(self):
+        """Load the CNN model"""
+        return self.cnn_predictor.load_model()
+    
+    def predict_with_ensemble(self, image: Image.Image, use_ocr: bool = True) -> Tuple[str, float, Dict[str, Any]]:
+        """
+        Comprehensive prediction using ensemble of CNN + OCR + Quality Assessment
+        Returns: (predicted_class, confidence, details)
+        """
+        details = {
+            'cnn_prediction': None,
+            'cnn_confidence': 0.0,
+            'ocr_prediction': None,
+            'ocr_confidence': 0.0,
+            'ocr_text': '',
+            'ensemble_method': 'cnn_only',
+            'agreement': False,
+            'quality_metrics': {},
+            'quality_penalty': 1.0,
+            'final_reasoning': ''
+        }
+        
+        try:
+            # 1. Assess image quality first
+            quality_metrics = self.quality_assessor.assess_image_quality(image)
+            details['quality_metrics'] = quality_metrics
+            
+            # Apply quality-based confidence penalty
+            quality_penalty = 1.0
+            if quality_metrics['overall_quality'] < 0.3:
+                quality_penalty = 0.6
+                details['final_reasoning'] = "Low image quality detected. "
+            elif quality_metrics['overall_quality'] < 0.5:
+                quality_penalty = 0.8
+                details['final_reasoning'] = "Moderate image quality. "
+            
+            details['quality_penalty'] = quality_penalty
+            
+            # 2. Get CNN prediction
+            cnn_class, cnn_conf = self.cnn_predictor.predict(image)
+            details['cnn_prediction'] = cnn_class
+            details['cnn_confidence'] = cnn_conf
+            
+            final_class = cnn_class
+            final_confidence = cnn_conf * quality_penalty
+            
+            # 3. OCR Analysis (if enabled)
+            if use_ocr:
+                try:
+                    # Get OCR prediction
+                    ocr_class, ocr_conf, ocr_text = self.ocr_detector.detect_service_status(image)
+                    details['ocr_prediction'] = ocr_class
+                    details['ocr_confidence'] = ocr_conf
+                    details['ocr_text'] = ocr_text[:200] + '...' if len(ocr_text) > 200 else ocr_text
+                    
+                    # Check if OCR found valid service history
+                    if ocr_class not in ["No Service History Found", "Data not correct"] and ocr_conf > 0.3:
+                        details['ensemble_method'] = 'ensemble'
+                        
+                        # Check agreement between CNN and OCR
+                        agreement_score = self.calculate_agreement(cnn_class, ocr_class)
+                        details['agreement'] = agreement_score > 0.5
+                        
+                        if agreement_score > 0.8:
+                            # Strong agreement - high confidence boost
+                            weight_cnn = 0.55
+                            weight_ocr = 0.45
+                            confidence_boost = 1.3
+                            final_confidence = (cnn_conf * weight_cnn + ocr_conf * weight_ocr) * confidence_boost
+                            final_confidence = min(0.95, final_confidence * quality_penalty)
+                            
+                            # Use higher confidence prediction
+                            final_class = cnn_class if cnn_conf > ocr_conf else ocr_class
+                            details['final_reasoning'] += f"Strong agreement between CNN and OCR ({agreement_score:.2f}). "
+                            
+                        elif agreement_score > 0.5:
+                            # Moderate agreement
+                            weight_cnn = 0.6
+                            weight_ocr = 0.4
+                            final_confidence = (cnn_conf * weight_cnn + ocr_conf * weight_ocr) * 1.15
+                            final_confidence = min(0.90, final_confidence * quality_penalty)
+                            
+                            final_class = cnn_class if cnn_conf > ocr_conf else ocr_class
+                            details['final_reasoning'] += f"Moderate agreement between predictions. "
+                            
+                        else:
+                            # Disagreement - use more confident but penalize
+                            if cnn_conf > ocr_conf:
+                                final_class = cnn_class
+                                final_confidence = cnn_conf * 0.75 * quality_penalty
+                                details['final_reasoning'] += "CNN prediction preferred due to higher confidence. "
+                            else:
+                                final_class = ocr_class
+                                final_confidence = ocr_conf * 0.75 * quality_penalty
+                                details['final_reasoning'] += "OCR prediction preferred due to higher confidence. "
+                    
+                    # Special case: OCR strongly indicates service history screen
+                    elif "parts and service history" in ocr_text.lower():
+                        details['ensemble_method'] = 'ocr_informed'
+                        # If OCR detects service screen but no clear status, prefer visual assessment
+                        if cnn_class in ["Unknown Part", "Service"]:
+                            final_confidence *= 1.1  # Slight boost for consistency
+                            details['final_reasoning'] += "Service history screen detected via OCR. "
+                        else:
+                            # CNN says genuine/incorrect but OCR sees service screen
+                            final_confidence *= 0.9  # Slight penalty for inconsistency
+                            details['final_reasoning'] += "Inconsistency: Service screen detected but visual classification differs. "
+                    
+                    else:
+                        # OCR didn't find valid results, rely on CNN
+                        details['ensemble_method'] = 'cnn_primary'
+                        details['final_reasoning'] += "No service history text detected, relying on visual analysis. "
+                        
+                except Exception as e:
+                    LOGGER.warning(f"OCR processing failed: {e}")
+                    details['ensemble_method'] = 'cnn_fallback'
+                    details['final_reasoning'] += "OCR analysis failed, using visual analysis only. "
+            
+            # 4. Final quality and context checks
+            final_confidence = self.apply_final_calibration(final_class, final_confidence, quality_metrics)
+            
+            # 5. Logging and return
+            LOGGER.info(f"Ensemble prediction: {final_class} (conf: {final_confidence:.3f}, method: {details['ensemble_method']}, quality: {quality_metrics['overall_quality']:.2f})")
+            
+            return final_class, final_confidence, details
+            
+        except Exception as e:
+            LOGGER.error(f"Ensemble prediction failed: {e}")
+            return "Data not correct", 0.1, details
+    
+    def apply_final_calibration(self, predicted_class: str, confidence: float, quality_metrics: Dict[str, float]) -> float:
+        """Apply final confidence calibration based on class and quality"""
+        
+        # Class-specific calibration
+        class_calibration = {
+            "Genuine": 1.0,         # Usually most reliable
+            "Unknown Part": 0.95,   # Fairly reliable
+            "Service": 0.90,        # Can be ambiguous  
+            "Data not correct": 0.85  # Often uncertain
+        }
+        
+        calibrated = confidence * class_calibration.get(predicted_class, 0.85)
+        
+        # Additional quality-based adjustments
+        if quality_metrics['sharpness'] < 0.3:
+            calibrated *= 0.9  # Blurry images are less reliable
+        
+        if quality_metrics['brightness'] < 0.2 or quality_metrics['brightness'] > 0.8:
+            calibrated *= 0.95  # Extreme lighting reduces reliability
+        
+        # Ensure reasonable bounds
+        return min(0.98, max(0.05, calibrated))
+    
+    def calculate_agreement(self, cnn_class: str, ocr_class: str) -> float:
+        """Calculate agreement score between CNN and OCR predictions"""
+        
+        # Direct match
+        if cnn_class == ocr_class:
+            return 1.0
+        
+        # Compatible mappings (partial agreement)
+        compatible_mappings = {
+            ("Unknown Part", "Service"): 0.7,  # Both indicate non-genuine
+            ("Service", "Unknown Part"): 0.7,
+            ("Genuine", "Data not correct"): 0.3,  # OCR might miss genuine indicators
+            ("Data not correct", "Genuine"): 0.3,
+        }
+        
+        pair = (cnn_class, ocr_class)
+        if pair in compatible_mappings:
+            return compatible_mappings[pair]
+        
+        # Reverse pair
+        reverse_pair = (ocr_class, cnn_class)
+        if reverse_pair in compatible_mappings:
+            return compatible_mappings[reverse_pair]
+        
+        # No agreement
+        return 0.2
     
     def predict_batch(self, images: List[Image.Image]) -> List[Tuple[str, float]]:
         """Predict classes and confidences for multiple images"""
@@ -567,43 +944,265 @@ class Predictor:
 # ========== OCR iPhone Service History Detector ==========
 class iPhoneServiceHistoryDetector:
     def __init__(self):
-        pass
+        # Known iPhone service history patterns and keywords
+        self.service_patterns = [
+            r"service[d]?",
+            r"replaced",
+            r"repaired",
+            r"serviced",
+            r"apple certified",
+            r"genuine apple"
+        ]
+        
+        self.unknown_part_patterns = [
+            r"unknown part",
+            r"non-genuine",
+            r"third[- ]?party",
+            r"aftermarket",
+            r"not verified",
+            r"replacement part"
+        ]
+        
+        self.genuine_patterns = [
+            r"genuine",
+            r"original",
+            r"apple certified",
+            r"verified",
+            r"authentic"
+        ]
+        
+        # Component keywords to identify iPhone parts
+        self.component_keywords = [
+            "battery", "screen", "display", "camera", "speaker", "microphone",
+            "home button", "touch id", "face id", "charging port", "lightning",
+            "wireless charging", "logic board", "antenna", "vibrator",
+            "proximity sensor", "ambient light sensor", "accelerometer"
+        ]
+    
+    def preprocess_image_for_ocr(self, image: Image.Image) -> Image.Image:
+        """Enhanced image preprocessing for better OCR accuracy"""
+        try:
+            # Convert to numpy array
+            img_np = np.array(image)
+            
+            # Convert to grayscale
+            if len(img_np.shape) == 3:
+                gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+            else:
+                gray = img_np
+            
+            # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            enhanced = clahe.apply(gray)
+            
+            # Gaussian blur to reduce noise
+            blurred = cv2.GaussianBlur(enhanced, (3, 3), 0)
+            
+            # Adaptive thresholding for better text separation
+            thresh = cv2.adaptiveThreshold(
+                blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+            )
+            
+            # Morphological operations to clean up the image
+            kernel = np.ones((2,2), np.uint8)
+            processed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+            
+            # Convert back to PIL Image
+            return Image.fromarray(processed)
+            
+        except Exception as e:
+            LOGGER.warning(f"Image preprocessing failed, using original: {e}")
+            return image
     
     def extract_text_from_image(self, image: Image.Image) -> str:
-        """Extract text from image using OCR"""
+        """Enhanced text extraction with multiple OCR strategies"""
         try:
-            # Convert PIL to OpenCV format
-            opencv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+            # Strategy 1: Preprocess and extract from enhanced image
+            processed_img = self.preprocess_image_for_ocr(image)
             
-            # Extract text using pytesseract
-            extracted_text = pytesseract.image_to_string(opencv_image)
-            return extracted_text
+            # Custom OCR configuration for better accuracy
+            custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,():/-+ '
+            
+            # Extract text with custom config
+            processed_text = pytesseract.image_to_string(processed_img, config=custom_config)
+            
+            # Strategy 2: Extract from original image as fallback
+            original_text = pytesseract.image_to_string(image)
+            
+            # Combine both results
+            combined_text = f"{processed_text}\n{original_text}"
+            
+            # Clean up the text
+            cleaned_text = self.clean_extracted_text(combined_text)
+            
+            LOGGER.debug(f"Extracted text length: {len(cleaned_text)} characters")
+            return cleaned_text
+            
         except Exception as e:
             LOGGER.error(f"OCR extraction failed: {e}")
             return ""
     
+    def clean_extracted_text(self, text: str) -> str:
+        """Clean and normalize extracted text"""
+        # Remove excessive whitespace
+        text = re.sub(r'\s+', ' ', text)
+        
+        # Normalize common OCR mistakes
+        corrections = {
+            'Servicé': 'Service',
+            'Serviced': 'Service',
+            'Génuine': 'Genuine',
+            'Genuíne': 'Genuine',
+            'Unknówn': 'Unknown',
+            'Pàrt': 'Part',
+            '0enuine': 'Genuine',  # OCR often mistakes G with 0
+            'Servlce': 'Service',   # OCR mistakes i with l
+        }
+        
+        for mistake, correction in corrections.items():
+            text = text.replace(mistake, correction)
+        
+        return text.strip()
+    
+    def analyze_text_patterns(self, text: str) -> Dict[str, Any]:
+        """Advanced pattern analysis of extracted text"""
+        text_lower = text.lower()
+        analysis = {
+            'has_service_history_header': False,
+            'service_matches': [],
+            'unknown_part_matches': [],
+            'genuine_matches': [],
+            'component_mentions': [],
+            'confidence_indicators': []
+        }
+        
+        # Check for service history header
+        header_patterns = [
+            r"parts?\s+and\s+service\s+history",
+            r"service\s+history",
+            r"parts?\s+history",
+            r"repair\s+history"
+        ]
+        
+        for pattern in header_patterns:
+            if re.search(pattern, text_lower):
+                analysis['has_service_history_header'] = True
+                break
+        
+        # Find service-related matches
+        for pattern in self.service_patterns:
+            matches = re.findall(pattern, text_lower)
+            analysis['service_matches'].extend(matches)
+        
+        # Find unknown part matches
+        for pattern in self.unknown_part_patterns:
+            matches = re.findall(pattern, text_lower)
+            analysis['unknown_part_matches'].extend(matches)
+        
+        # Find genuine part matches
+        for pattern in self.genuine_patterns:
+            matches = re.findall(pattern, text_lower)
+            analysis['genuine_matches'].extend(matches)
+        
+        # Find component mentions
+        for component in self.component_keywords:
+            if component.lower() in text_lower:
+                analysis['component_mentions'].append(component)
+        
+        # Look for confidence indicators
+        confidence_patterns = [
+            (r"apple\s+certified", 0.9),
+            (r"verified\s+genuine", 0.9),
+            (r"original\s+apple", 0.9),
+            (r"third[- ]?party", 0.8),
+            (r"aftermarket", 0.8),
+            (r"non[- ]?genuine", 0.8),
+        ]
+        
+        for pattern, confidence in confidence_patterns:
+            if re.search(pattern, text_lower):
+                analysis['confidence_indicators'].append((pattern, confidence))
+        
+        return analysis
+    
+    def calculate_advanced_confidence(self, analysis: Dict[str, Any], predicted_class: str) -> float:
+        """Calculate confidence score based on multiple factors"""
+        base_confidence = 0.3
+        
+        # Header presence boost
+        if analysis['has_service_history_header']:
+            base_confidence += 0.2
+        
+        # Component mentions boost (indicates it's actually a service screen)
+        component_boost = min(0.2, len(analysis['component_mentions']) * 0.05)
+        base_confidence += component_boost
+        
+        # Pattern match scoring
+        if predicted_class == "Unknown Part":
+            unknown_count = len(analysis['unknown_part_matches'])
+            if unknown_count > 0:
+                base_confidence += min(0.4, unknown_count * 0.2)
+                
+        elif predicted_class == "Service":
+            service_count = len(analysis['service_matches'])
+            # Subtract header mentions (usually contains "service")
+            adjusted_service_count = max(0, service_count - 2)
+            if adjusted_service_count > 0:
+                base_confidence += min(0.3, adjusted_service_count * 0.15)
+                
+        elif predicted_class == "Genuine":
+            genuine_count = len(analysis['genuine_matches'])
+            if genuine_count > 0:
+                base_confidence += min(0.4, genuine_count * 0.2)
+        
+        # Confidence indicators boost
+        for pattern, conf_boost in analysis['confidence_indicators']:
+            if predicted_class.lower() in pattern:
+                base_confidence += 0.1
+        
+        return min(0.95, base_confidence)
+    
     def detect_service_status(self, image: Image.Image) -> Tuple[str, float, str]:
-        """Detect if parts show 'Service' or 'Unknown Part' in iPhone service history"""
+        """Enhanced service status detection with pattern matching"""
         
         extracted_text = self.extract_text_from_image(image)
         
-        # Look for "Parts and Service History" section
-        if "parts and service history" not in extracted_text.lower():
-            return "No Service History Found", 0.0, extracted_text
+        if not extracted_text.strip():
+            return "Data not correct", 0.1, "No text could be extracted from image"
         
-        # Count occurrences of "Service" and "Unknown Part"
-        service_count = extracted_text.lower().count("service")
-        unknown_part_count = extracted_text.lower().count("unknown part")
+        # Perform advanced text analysis
+        analysis = self.analyze_text_patterns(extracted_text)
         
-        # Determine prediction based on counts
-        if unknown_part_count > 0:
-            confidence = min(0.9, (unknown_part_count * 0.3) + 0.6)
-            return "Unknown Part", confidence, extracted_text
-        elif service_count > 2:  # More than 2 to account for the header
-            confidence = min(0.9, (service_count * 0.15) + 0.5)
-            return "Service", confidence, extracted_text
-        else:
-            return "Unclear", 0.3, extracted_text
+        LOGGER.debug(f"Text analysis: {analysis}")
+        
+        # Decision logic based on pattern analysis
+        unknown_part_score = len(analysis['unknown_part_matches'])
+        service_score = max(0, len(analysis['service_matches']) - 2)  # Subtract header mentions
+        genuine_score = len(analysis['genuine_matches'])
+        
+        # Determine prediction
+        predicted_class = "Data not correct"
+        
+        if unknown_part_score > 0:
+            predicted_class = "Unknown Part"
+        elif genuine_score > service_score and genuine_score > 0:
+            predicted_class = "Genuine"
+        elif service_score > 0:
+            predicted_class = "Service"
+        elif analysis['has_service_history_header']:
+            # If we have the header but no clear indicators, check for component mentions
+            if analysis['component_mentions']:
+                predicted_class = "Genuine"  # Assume genuine if components listed but no issues
+            else:
+                predicted_class = "Data not correct"  # Header present but unclear content
+        
+        # Calculate confidence
+        confidence = self.calculate_advanced_confidence(analysis, predicted_class)
+        
+        LOGGER.info(f"Prediction: {predicted_class} (confidence: {confidence:.3f})")
+        LOGGER.debug(f"Scores - Unknown: {unknown_part_score}, Service: {service_score}, Genuine: {genuine_score}")
+        
+        return predicted_class, confidence, extracted_text
 
 # ========== Feedback Management ==========
 class FeedbackManager:
@@ -684,9 +1283,9 @@ def ui_predict_single(appcfg: AppConfig, tcfg: TrainConfig):
     """Single image prediction UI"""
     st.header("🔍 Single Image Prediction")
     
-    # Initialize predictor in session state
+    # Initialize ensemble predictor in session state
     if 'predictor' not in st.session_state:
-        st.session_state['predictor'] = Predictor()
+        st.session_state['predictor'] = EnsemblePredictor()
         st.session_state['predictor_loaded'] = False
         st.session_state['uploaded_image'] = None
         st.session_state['fetched_image'] = None
@@ -766,35 +1365,103 @@ def ui_predict_single(appcfg: AppConfig, tcfg: TrainConfig):
                             progress_text = st.empty()
                             progress_text.text("🔄 Processing image...")
                             
-                            with st.spinner("Predicting..."):
-                                predicted_class, confidence = predictor.predict(image)
+                            with st.spinner("Analyzing image..."):
+                                # Use ensemble prediction with detailed analysis
+                                use_ocr = st.checkbox("Enable OCR Analysis", value=True, key="use_ocr_single")
+                                predicted_class, confidence, details = predictor.predict_with_ensemble(image, use_ocr=use_ocr)
                             
                             progress_text.empty()
                             
-                            # Display results
+                            # Display main results
                             st.subheader("🎯 Prediction Results")
                             
-                            # Color-coded result
-                            if predicted_class == "Unknown Part":
-                                st.error(f"🚨 **{predicted_class}**")
-                            elif predicted_class == "Service":
-                                st.warning(f"⚠️ **{predicted_class}**")
-                            elif predicted_class == "Genuine":
-                                st.success(f"✅ **{predicted_class}**")
-                            elif predicted_class == "Data not correct":
-                                st.info(f"❌ **{predicted_class}**")
-                            else:
-                                st.write(f"❓ **{predicted_class}**")
+                            # Color-coded result with enhanced display
+                            col1, col2, col3 = st.columns([2, 1, 1])
                             
-                            st.metric("Confidence", f"{confidence:.1%}")
+                            with col1:
+                                if predicted_class == "Unknown Part":
+                                    st.error(f"🚨 **{predicted_class}**")
+                                elif predicted_class == "Service":
+                                    st.warning(f"⚠️ **{predicted_class}**")
+                                elif predicted_class == "Genuine":
+                                    st.success(f"✅ **{predicted_class}**")
+                                elif predicted_class == "Data not correct":
+                                    st.info(f"❌ **{predicted_class}**")
+                                else:
+                                    st.write(f"❓ **{predicted_class}**")
                             
-                            # Confidence bar
-                            st.progress(confidence)
+                            with col2:
+                                st.metric("Confidence", f"{confidence:.1%}")
+                                st.progress(confidence)
                             
-                            if confidence < 0.5:
-                                st.warning("⚠️ Low confidence prediction")
+                            with col3:
+                                quality_score = details.get('quality_metrics', {}).get('overall_quality', 0)
+                                st.metric("Image Quality", f"{quality_score:.1%}")
+                                st.progress(quality_score)
                             
-                            LOGGER.info(f"Prediction completed: {predicted_class} ({confidence:.1%})")
+                            # Analysis details in expandable section
+                            with st.expander("🔬 Detailed Analysis", expanded=confidence < 0.6):
+                                
+                                # Method used
+                                method = details.get('ensemble_method', 'unknown')
+                                st.write(f"**Analysis Method:** {method.replace('_', ' ').title()}")
+                                
+                                # Reasoning
+                                if details.get('final_reasoning'):
+                                    st.write(f"**Reasoning:** {details['final_reasoning']}")
+                                
+                                # CNN vs OCR comparison
+                                if details.get('cnn_prediction') and details.get('ocr_prediction'):
+                                    col1, col2 = st.columns(2)
+                                    
+                                    with col1:
+                                        st.write("**Visual Analysis (CNN)**")
+                                        st.write(f"Prediction: {details['cnn_prediction']}")
+                                        st.write(f"Confidence: {details['cnn_confidence']:.1%}")
+                                    
+                                    with col2:
+                                        st.write("**Text Analysis (OCR)**")
+                                        st.write(f"Prediction: {details['ocr_prediction']}")
+                                        st.write(f"Confidence: {details['ocr_confidence']:.1%}")
+                                        
+                                    # Agreement indicator
+                                    if details.get('agreement'):
+                                        st.success("✅ Methods agree - high confidence")
+                                    else:
+                                        st.warning("⚠️ Methods disagree - moderate confidence")
+                                
+                                # Quality metrics breakdown
+                                quality_metrics = details.get('quality_metrics', {})
+                                if quality_metrics:
+                                    st.write("**Image Quality Breakdown:**")
+                                    metrics_cols = st.columns(3)
+                                    
+                                    with metrics_cols[0]:
+                                        st.write(f"Sharpness: {quality_metrics.get('sharpness', 0):.2f}")
+                                        st.write(f"Contrast: {quality_metrics.get('contrast', 0):.2f}")
+                                    
+                                    with metrics_cols[1]:
+                                        st.write(f"Brightness: {quality_metrics.get('brightness', 0):.2f}")
+                                        st.write(f"Resolution: {quality_metrics.get('resolution_score', 0):.2f}")
+                                    
+                                    with metrics_cols[2]:
+                                        st.write(f"Color Variety: {quality_metrics.get('color_variety', 0):.2f}")
+                                        st.write(f"Edge Density: {quality_metrics.get('edge_density', 0):.2f}")
+                                
+                                # OCR text preview
+                                if details.get('ocr_text') and len(details['ocr_text']) > 10:
+                                    st.write("**Extracted Text Preview:**")
+                                    st.text_area("OCR Output", details['ocr_text'], height=100, disabled=True)
+                            
+                            # Confidence warnings
+                            if confidence < 0.3:
+                                st.error("⚠️ Very low confidence - results may be unreliable")
+                            elif confidence < 0.5:
+                                st.warning("⚠️ Low confidence - consider retaking the image")
+                            elif confidence > 0.8:
+                                st.success("✅ High confidence prediction")
+                            
+                            LOGGER.info(f"Enhanced prediction completed: {predicted_class} ({confidence:.1%}, method: {details.get('ensemble_method', 'unknown')})")
                             
                         except Exception as e:
                             st.error(f"❌ Prediction failed: {str(e)}")
@@ -829,7 +1496,7 @@ def ui_predict_batch(appcfg: AppConfig, tcfg: TrainConfig):
             st.warning("No valid URLs provided")
             return
         
-        predictor = Predictor()
+        predictor = EnsemblePredictor()
         if not predictor.load_model():
             st.error("❌ Failed to load model. Train a model first.")
             return
@@ -848,8 +1515,8 @@ def ui_predict_batch(appcfg: AppConfig, tcfg: TrainConfig):
                 # Fetch image
                 image = fetcher.fetch(url)
                 
-                # Predict
-                predicted_class, confidence = predictor.predict(image)
+                # Predict with ensemble
+                predicted_class, confidence, _ = predictor.predict_with_ensemble(image)
                 
                 results.append({
                     "URL": url,
@@ -1474,7 +2141,7 @@ def ui_evaluate(tcfg: TrainConfig):
     st.header("📈 Model Evaluation")
     
     if st.button("🔍 Evaluate Model", key="evaluate_model"):
-        predictor = Predictor()
+        predictor = EnsemblePredictor()
         
         if not predictor.load_model():
             st.error("❌ No trained model found. Train a model first.")

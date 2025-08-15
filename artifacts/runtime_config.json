@@ -7,8 +7,8 @@
     "lr": 0.001,
     "weight_decay": 0.0001,
     "early_stop_patience": 5,
-    "model_name": "resnet18",
-    "freeze_backbone": false,
+    "model_name": "resnet50",
+    "freeze_backbone": true,
     "mixup_alpha": 0.0,
     "cutmix_alpha": 0.0,
     "amp": true,
@@ -25,5 +25,5 @@
     "retry_attempts": 3,
     "retry_backoff_sec": 1.5
   },
-  "saved_at": "2025-08-15T18:28:26.621594"
+  "saved_at": "2025-08-15T18:37:16.375113"
 }

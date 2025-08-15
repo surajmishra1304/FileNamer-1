@@ -2169,11 +2169,13 @@ def ui_evaluate(tcfg: TrainConfig):
             all_confidences = []
             
             with st.spinner("Evaluating model..."):
-                predictor.model.eval()
+                # Use the CNN predictor from the ensemble for evaluation
+                cnn_model = predictor.cnn_predictor
+                cnn_model.model.eval()
                 with torch.no_grad():
                     for images, labels in test_loader:
-                        images = images.to(predictor.device)
-                        outputs = predictor.model(images)
+                        images = images.to(cnn_model.device)
+                        outputs = cnn_model.model(images)
                         
                         probabilities = torch.nn.functional.softmax(outputs, dim=1)
                         confidences, predictions = torch.max(probabilities, 1)
